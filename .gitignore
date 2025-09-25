@@ -1,0 +1,4 @@
+cache/ 
+*.db 
+news_downloads/ 
+__pycache__/ 
