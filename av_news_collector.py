@@ -319,11 +319,11 @@ class AlphaVantageNewsClient:
         if time_to:
             params['time_to'] = time_to
 
-        cache_key = "news_symbol_{}_{}_{}".format(
+        cache_key = sanitize_cache_key("news_symbol_{}_{}_{}".format(
             symbol,
             time_from or "default",
             time_to or "default"
-        )
+        ))
 
         return self._make_request(params, cache_key, max_age_seconds)
 
@@ -341,11 +341,11 @@ class AlphaVantageNewsClient:
         if time_to:
             params['time_to'] = time_to
 
-        cache_key = "news_topic_{}_{}_{}".format(
+        cache_key = sanitize_cache_key("news_topic_{}_{}_{}".format(
             topic.replace(',', '_'),
             time_from or "default",
             time_to or "default"
-        )
+        ))
 
         return self._make_request(params, cache_key, max_age_seconds)
 
@@ -382,6 +382,9 @@ class NewsCollector:
             try:
                 with open(config_file, 'r') as f:
                     config = json.load(f)
+            except json.JSONDecodeError:
+                print("Warning: Config file {} contains invalid JSON - creating new config".format(config_file))
+                config = {}
             except Exception:
                 pass
 
@@ -403,6 +406,9 @@ class NewsCollector:
             try:
                 with open(config_file, 'r') as f:
                     config = json.load(f)
+            except json.JSONDecodeError:
+                print("Warning: Config file {} contains invalid JSON - creating new config".format(config_file))
+                config = {}
             except Exception:
                 pass
 
@@ -430,6 +436,9 @@ class NewsCollector:
             with open(config_file, 'r') as f:
                 config = json.load(f)
                 return config.get('api_key')
+        except json.JSONDecodeError:
+            print("Warning: Config file {} contains invalid JSON - using defaults".format(config_file))
+            return None
         except Exception:
             return None
 
@@ -457,6 +466,9 @@ class NewsCollector:
                 if tier in AV_RATE_LIMITS:
                     return tier
                 return 'free'
+        except json.JSONDecodeError:
+            print("Warning: Config file {} contains invalid JSON - using free tier".format(config_file))
+            return 'free'
         except Exception:
             return 'free'
 
@@ -763,7 +775,7 @@ class NewsCollector:
                     'overall_sentiment_score', 'overall_sentiment_label', 'symbols_mentioned'
                 ]
 
-            writer = csv.writer(csvfile)
+            writer = csv.writer(csvfile, quoting=csv.QUOTE_ALL)
             writer.writerow(fieldnames)
             writer.writerows(results)
 
@@ -928,6 +940,28 @@ def list_topics():
     print("  python av_news_collector.py --topic technology")
     print("  python av_news_collector.py --topic earnings --limit 100")
     print("  python av_news_collector.py --topic financial_markets --from 2025-09-15")
+
+
+def validate_date_format(date_string):
+    """Validate and convert date string from YYYY-MM-DD to YYYYMMDDT0000/T2359"""
+    if not date_string:
+        return None
+
+    try:
+        # Validate the date format
+        datetime.strptime(date_string, "%Y-%m-%d")
+        return date_string.replace("-", "")
+    except ValueError:
+        raise ValueError("Invalid date format '{}'. Expected YYYY-MM-DD (e.g., 2025-09-15)".format(date_string))
+
+
+def sanitize_cache_key(cache_key):
+    """Sanitize cache key to be safe for filenames on all platforms"""
+    # Replace problematic characters with underscores
+    problematic_chars = [':', '/', '\\', '|', '?', '*', '<', '>', '"']
+    for char in problematic_chars:
+        cache_key = cache_key.replace(char, '_')
+    return cache_key
 
 
 def clear_screen():
@@ -1130,9 +1164,20 @@ def execute_collection(symbols, topic, limit, date_from, date_to, format_choice)
         db_path = downloads_dir / "database" / "news_data.db"
         collector = NewsCollector(str(api_key), str(db_path), "./cache", subscription_tier, quiet=False)
 
-        # Convert date format if provided
-        time_from = date_from.replace("-", "") + "T0000" if date_from else None
-        time_to = date_to.replace("-", "") + "T2359" if date_to else None
+        # Convert and validate date format if provided
+        try:
+            time_from = None
+            time_to = None
+            if date_from:
+                validated_from = validate_date_format(date_from)
+                time_from = validated_from + "T0000" if validated_from else None
+            if date_to:
+                validated_to = validate_date_format(date_to)
+                time_to = validated_to + "T2359" if validated_to else None
+        except ValueError as e:
+            print("\\nError: {}".format(e))
+            input("Press Enter to continue...")
+            return False
 
         # Show initial usage stats
         collector.show_usage_stats()
@@ -1537,14 +1582,19 @@ Examples:
         # Initialize collector with subscription tier and quiet mode
         collector = NewsCollector(api_key, args.db, args.cache_dir, subscription_tier, args.no_interact)
 
-        # Convert date format if provided
+        # Convert and validate date format if provided
         time_from = None
         time_to = None
-        if args.time_from:
-            # Convert YYYY-MM-DD to YYYYMMDDTHHMM
-            time_from = args.time_from.replace("-", "") + "T0000"
-        if args.time_to:
-            time_to = args.time_to.replace("-", "") + "T2359"
+        try:
+            if args.time_from:
+                validated_from = validate_date_format(args.time_from)
+                time_from = validated_from + "T0000" if validated_from else None
+            if args.time_to:
+                validated_to = validate_date_format(args.time_to)
+                time_to = validated_to + "T2359" if validated_to else None
+        except ValueError as e:
+            print("Error: {}".format(e))
+            sys.exit(1)
 
         # Show current API usage
         collector.show_usage_stats()
